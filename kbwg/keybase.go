@@ -1,4 +1,4 @@
-package main
+package kbwg
 
 import (
 	"encoding/json"
@@ -6,6 +6,15 @@ import (
 
 	"github.com/keybase/go-keybase-chat-bot/kbchat"
 )
+
+type StatusJSONPart struct {
+	Username string `json:"Username"`
+	Device   struct {
+		Type     string `json:"type"`
+		Name     string `json:"name"`
+		DeviceID string `json:"deviceID"`
+	} `json:"Device"`
+}
 
 func KeybaseGetLoggedInStatus(api *kbchat.API) (ret StatusJSONPart, err error) {
 	statusCmd := api.Command("status", "--json")

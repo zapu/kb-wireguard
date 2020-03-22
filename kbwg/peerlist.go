@@ -1,4 +1,4 @@
-package main
+package kbwg
 
 import (
 	"encoding/json"

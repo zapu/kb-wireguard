@@ -6,21 +6,14 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/zapu/kb-wireguard/kbwg"
+
 	"github.com/keybase/go-keybase-chat-bot/kbchat"
 )
 
 func fail(msg string, args ...interface{}) {
 	fmt.Fprintf(os.Stderr, msg+"\n", args...)
 	os.Exit(3)
-}
-
-type StatusJSONPart struct {
-	Username string `json:"Username"`
-	Device   struct {
-		Type     string `json:"type"`
-		Name     string `json:"name"`
-		DeviceID string `json:"deviceID"`
-	} `json:"Device"`
 }
 
 func failUsage(msg string, args ...interface{}) {
@@ -43,7 +36,7 @@ func main() {
 		failUsage("`team` argument is required")
 	}
 
-	var prog *Program = &Program{}
+	prog := &kbwg.Program{}
 	prog.KeybaseTeam = kbTeamArg
 	prog.Endpoint = endpointArg
 
@@ -74,7 +67,7 @@ func main() {
 	fmt.Printf(":: We are logged in as: %s (%s)\n", prog.Self.Username, prog.Self.Device)
 	fmt.Printf(":: Trying to peer with team @%s\n", prog.KeybaseTeam)
 
-	announceConv, err := AnnounceFindChat(prog.MCtxTODO())
+	announceConv, err := kbwg.AnnounceFindChat(prog.MCtxTODO())
 	if err != nil {
 		fail("didn't find announce conv: %s", err)
 	}
@@ -82,16 +75,16 @@ func main() {
 
 	fmt.Printf(":: Found announcement channel: @%s#%s\n", announceConv.Channel.Name, announceConv.Channel.TopicName)
 
-	peers, err := LoadPeerList(prog.MCtxTODO())
+	peers, err := kbwg.LoadPeerList(prog.MCtxTODO())
 	if err != nil {
 		fail("%s", err)
 	}
 
-	prog.KeybasePeers = make(map[KBDev]KeybasePeer, len(peers))
+	prog.KeybasePeers = make(map[kbwg.KBDev]kbwg.KeybasePeer, len(peers))
 
 	var foundSelf bool
 	for _, peer := range peers {
-		kbPeer := KeybasePeer{
+		kbPeer := kbwg.KeybasePeer{
 			Device: peer.GetKBDev(),
 			IP:     peer.IP,
 		}
@@ -111,7 +104,7 @@ func main() {
 
 	fmt.Printf(":: Found total %d peers in peers.txt\n", len(prog.KeybasePeers))
 
-	err = FindAnnouncements(prog.MCtxTODO())
+	err = kbwg.FindAnnouncements(prog.MCtxTODO())
 	if err != nil {
 		fail("%s", err)
 	}
