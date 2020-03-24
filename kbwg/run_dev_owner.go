@@ -7,17 +7,18 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/davecgh/go-spew/spew"
-
 	devowner "github.com/zapu/kb-wireguard/devowner"
 )
 
-type DevOwnerProcess struct {
+// Run process that sets up and "owns" the wireguard device, and also tears it
+// down when it exits.
+
+type DevRunnerProcess struct {
 	doneCh chan struct{}
 }
 
-func RunDevOwnerProcess() {
-	var process DevOwnerProcess
+func RunDevRunner() {
+	var process DevRunnerProcess
 	process.doneCh = make(chan struct{})
 
 	cmd := exec.Command("sudo", "./devowner")
@@ -37,8 +38,12 @@ func RunDevOwnerProcess() {
 			err = json.Unmarshal(line, &msg)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Failed to unmarshall from RunDev: %s", err)
+				continue
 			}
-			spew.Dump(msg)
+			err = handleDevRunnerControlMsg(msg)
+			if err != nil {
+
+			}
 		}
 	}()
 
@@ -49,8 +54,18 @@ func RunDevOwnerProcess() {
 				continue
 			}
 			fmt.Printf("RunDev: %s\n", line)
+
+			// TODO: Push these through channel as well
 		}
 	}()
 
 	go cmd.Run()
+}
+
+func handleDevRunnerControlMsg(msg devowner.PipeMsg) error {
+	if msg.ID == "pubkey" {
+		pubkey := msg.Payload.(string)
+		fmt.Printf("Received pub key from device runner: %s", pubkey)
+	}
+	return nil
 }

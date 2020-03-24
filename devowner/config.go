@@ -7,13 +7,13 @@ import (
 
 type WireguardConfig struct {
 	ListenPort uint16
-	PrivateKey string
+	PrivateKey WireguardPrivKey
 
 	Peers []WireguardPeer
 }
 
 type WireguardPeer struct {
-	PublicKey  string
+	PublicKey  WireguardPubKey
 	AllowedIPs string
 	Endpoint   string
 
@@ -32,7 +32,7 @@ func SerializeConfig(conf WireguardConfig) string {
 		if peer.Label != "" {
 			builder.WriteString(fmt.Sprintf("# %s\n", peer.Label))
 		}
-		builder.WriteString(fmt.Sprintf("PublicKey = %d\n", peer.PublicKey))
+		builder.WriteString(fmt.Sprintf("PublicKey = %s\n", peer.PublicKey))
 		builder.WriteString(fmt.Sprintf("AllowedIPs = %s\n", peer.AllowedIPs))
 		builder.WriteString(fmt.Sprintf("Endpoint = %s\n", peer.Endpoint))
 		builder.WriteString("\n")

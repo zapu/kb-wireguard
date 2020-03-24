@@ -2,22 +2,34 @@ package kbwg
 
 import (
 	"fmt"
+	"regexp"
+	"time"
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/keybase/go-keybase-chat-bot/kbchat/types/chat1"
 )
 
 type AnnounceMsg struct {
-	// Device making the announcement.
-	Device KBDev
 	// Peer announces their endpoint, should be ip:port.
 	Endpoint string
+	// Public key
+	PublicKey string
+	SentAt    time.Time
 }
 
 const AnnounceChatName = "announce"
 
-func ParseAnnounceMsg() {
+// ANNOUNCE ip_addr pub_key
+var announceChatMsgRxp = regexp.MustCompile("ANNOUNCE (.+) (.+)")
 
+func ParseAnnounceMsg(msg string) (ret AnnounceMsg, ok bool) {
+	matches := announceChatMsgRxp.FindStringSubmatch(msg)
+	if len(matches) > 0 {
+		ret.Endpoint = matches[0]
+		ret.PublicKey = matches[1]
+		return ret, true
+	}
+	return ret, false
 }
 
 func AnnounceFindChat(mctx MetaContext) (ret chat1.ConvSummary, err error) {
@@ -40,8 +52,13 @@ func FindAnnouncements(mctx MetaContext) error {
 	if err != nil {
 		return err
 	}
+	cutoff := time.Now().Add(-1 * time.Hour)
 	announcementsFound := make(map[KBDev]struct{}) // only take first announcement for each user
 	for _, msg := range messages {
+		sentAt := time.Unix(msg.SentAt, 0)
+		if sentAt.Before(cutoff) {
+			break
+		}
 		kbdev := KBDev{
 			Device:   msg.Sender.DeviceName,
 			Username: msg.Sender.Username,
@@ -56,7 +73,12 @@ func FindAnnouncements(mctx MetaContext) error {
 			continue
 		}
 		announcementsFound[kbdev] = struct{}{}
-		peer.LastAnnouncement = msg.Content.Text.Body
+		parsed, ok := ParseAnnounceMsg(msg.Content.Text.Body)
+		if !ok {
+			continue
+		}
+		parsed.SentAt = sentAt
+		peer.LastAnnouncement = parsed
 		mctx.Prog.KeybasePeers[kbdev] = peer
 
 		fmt.Printf("+ %v is announcing %s\n", kbdev, msg.Content.Text.Body)

@@ -1,2 +1,3 @@
-cmd/devowner/devowner
-cmd/kb-wireguard/kb-wireguard
+kb-wireguard
+run-dev
+scp.sh

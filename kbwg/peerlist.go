@@ -36,12 +36,12 @@ type KeybasePeer struct {
 	// discovery (LAN not implemented).
 	Endpoint string
 
-	LastAnnouncement string
+	LastAnnouncement AnnounceMsg
 }
 
 type PeerJSON struct {
 	Username string `json:"username"`
-	Device   string `json:"device""`
+	Device   string `json:"device"`
 	IP       string `json:"ip"`
 }
 
@@ -63,12 +63,4 @@ func LoadPeerList(mctx MetaContext) (peers []PeerJSON, err error) {
 		return nil, fmt.Errorf("Failed to unmarshal peers.txt: %w", err)
 	}
 	return peers, nil
-}
-
-// WireguardPeer is a struct to use when interacting with WireGuard through
-// `wg` command.
-type WireguardPeer struct {
-	AllowedIP string
-	Endpoint  string
-	PublicKey string
 }
