@@ -3,6 +3,8 @@ package kbwg
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/zapu/kb-wireguard/libwireguard"
 )
 
 // KBDev identifies unique peer by Keybase username and device name. Usernames
@@ -12,13 +14,16 @@ type KBDev struct {
 	Device   string `json:"device"`
 }
 
-// KeybasePeer is a peer found in peers.txt, not necessarily a WireGuard peer
+// KeybasePeer is a peer found in peers.json, not necessarily a WireGuard peer
 // (yet, or ever) - depending if we've heard their announcement.
 type KeybasePeer struct {
 	// Device in Keybase realm. Username+Devicename pair. Also found in
-	// peers.txt. We will be looking for announcement messages in Keybase chat
+	// peers.json. We will be looking for announcement messages in Keybase chat
 	// from that device.
 	Device KBDev `json:"device"`
+
+	// Was there an announcement from that peer?
+	Active bool
 
 	// IP address for the peer. If we hear an announcement from that peer, we
 	// will give them this address.
@@ -53,14 +58,32 @@ func (p PeerJSON) GetKBDev() KBDev {
 }
 
 func LoadPeerList(mctx MetaContext) (peers []PeerJSON, err error) {
-	peerBytes, err := KeybaseReadKBFS(mctx.API(), fmt.Sprintf("/keybase/team/%s/peers.txt", mctx.Prog.KeybaseTeam))
+	peerBytes, err := KeybaseReadKBFS(mctx.API(), fmt.Sprintf("/keybase/team/%s/peers.json", mctx.Prog.KeybaseTeam))
 	if err != nil {
 		return nil, err
 	}
 
 	err = json.Unmarshal(peerBytes, &peers)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to unmarshal peers.txt: %w", err)
+		return nil, fmt.Errorf("Failed to unmarshal peers.json: %w", err)
 	}
 	return peers, nil
+}
+
+func SerializeWireGuardPeerList(mctx MetaContext) (ret []libwireguard.WireguardPeer) {
+	ret = make([]libwireguard.WireguardPeer, 0, len(mctx.Prog.KeybasePeers))
+	for _, v := range mctx.Prog.KeybasePeers {
+		if !v.Active {
+			continue
+		}
+
+		label := fmt.Sprintf("%s (%s)", v.Device.Username, v.Device.Device)
+		ret = append(ret, libwireguard.WireguardPeer{
+			PublicKey:  libwireguard.WireguardPubKey(v.PublicKey),
+			AllowedIPs: v.IP,
+			Endpoint:   v.Endpoint,
+			Label:      label,
+		})
+	}
+	return ret
 }

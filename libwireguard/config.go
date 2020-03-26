@@ -1,4 +1,4 @@
-package devowner
+package libwireguard
 
 import (
 	"fmt"

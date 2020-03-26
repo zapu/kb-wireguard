@@ -17,8 +17,9 @@ type Program struct {
 
 	Endpoint string
 
-	// `KeybasePeers` is a list of peers from peers.txt excluding ourselves. So
-	// the actual list of all peers in the VPN is `KeybasePeers` + `SelfPeer`.
+	// `KeybasePeers` is a list of peers from peers.json excluding ourselves.
+	// So the actual list of all peers in the VPN is `KeybasePeers` +
+	// `SelfPeer`.
 
 	SelfPeer     KeybasePeer
 	KeybasePeers map[KBDev]KeybasePeer

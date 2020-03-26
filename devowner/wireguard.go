@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"github.com/zapu/kb-wireguard/libwireguard"
 )
 
-type WireguardPrivKey string
-type WireguardPubKey string
-
-func WireguardGenKey() (priv WireguardPrivKey, pub WireguardPubKey, err error) {
+// WireguardGenKey calls `wg genkey` and `wg pubkey` to generate keypair.
+func WireguardGenKey() (priv libwireguard.WireguardPrivKey, pub libwireguard.WireguardPubKey, err error) {
 	cmd := exec.Command("wg", "genkey")
 	privBytes, err := cmd.Output()
 	if err != nil {
@@ -23,7 +23,7 @@ func WireguardGenKey() (priv WireguardPrivKey, pub WireguardPubKey, err error) {
 		return "", "", fmt.Errorf("Failed to run pubkey: %w", err)
 	}
 	// Need to trim output because it ends with newlines.
-	return WireguardPrivKey(strings.TrimSpace(string(privBytes))),
-		WireguardPubKey(strings.TrimSpace(string(pubBytes))),
+	return libwireguard.WireguardPrivKey(strings.TrimSpace(string(privBytes))),
+		libwireguard.WireguardPubKey(strings.TrimSpace(string(pubBytes))),
 		nil
 }

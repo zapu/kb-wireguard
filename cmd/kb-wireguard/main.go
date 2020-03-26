@@ -2,13 +2,20 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
+	"github.com/davecgh/go-spew/spew"
+	"github.com/zapu/kb-wireguard/devowner"
 	"github.com/zapu/kb-wireguard/kbwg"
 
 	"github.com/keybase/go-keybase-chat-bot/kbchat"
+
+	"gortc.io/stun"
 )
 
 func fail(msg string, args ...interface{}) {
@@ -22,7 +29,37 @@ func failUsage(msg string, args ...interface{}) {
 	os.Exit(2)
 }
 
+// WIP
+func stunDial() {
+	fmt.Printf(":: Trying to STUN\n")
+	// Creating a "connection" to STUN server.
+	c, err := stun.Dial("udp", "stun.l.google.com:19302")
+	if err != nil {
+		panic(err)
+	}
+	// Building binding request with random transaction id.
+	message := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
+	// Sending request to STUN server, waiting for response message.
+	if err := c.Do(message, func(res stun.Event) {
+		if res.Error != nil {
+			panic(res.Error)
+		}
+		// Decoding XOR-MAPPED-ADDRESS attribute from message.
+		var xorAddr stun.XORMappedAddress
+		if err := xorAddr.GetFrom(res.Message); err != nil {
+			panic(err)
+		}
+		spew.Dump(xorAddr)
+	}); err != nil {
+		panic(err)
+	}
+}
+
 func main() {
+	var err error
+
+	// stunDial()
+
 	var endpointArg string
 	var kbTeamArg string
 	flag.StringVar(&endpointArg, "endpoint", "", "Public endpoint for this machine. Will be announced to other peers.")
@@ -42,7 +79,7 @@ func main() {
 
 	var kbc *kbchat.API
 
-	kbc, err := kbchat.Start(kbchat.RunOptions{})
+	kbc, err = kbchat.Start(kbchat.RunOptions{})
 	if err != nil {
 		fail("Failed to start kbchat: %s", err)
 	}
@@ -75,6 +112,7 @@ func main() {
 
 	fmt.Printf(":: Found announcement channel: @%s#%s\n", announceConv.Channel.Name, announceConv.Channel.TopicName)
 
+	// Load peers
 	peers, err := kbwg.LoadPeerList(prog.MCtxTODO())
 	if err != nil {
 		fail("%s", err)
@@ -91,27 +129,62 @@ func main() {
 
 		if peer.Username == prog.Self.Username && peer.Device == prog.Self.Device {
 			if foundSelf {
-				// TODO: be smarter about finding duplicates in peers.txt
+				// TODO: be smarter about finding duplicates in peers.json
 				fail("Found self twice???")
 			}
 			foundSelf = true
 			prog.SelfPeer = kbPeer
-			prog.KeybasePeers[kbPeer.Device] = kbPeer // TODO: temporary
 		} else {
 			prog.KeybasePeers[kbPeer.Device] = kbPeer
 		}
 	}
 
-	fmt.Printf(":: Found total %d peers in peers.txt\n", len(prog.KeybasePeers))
+	if !foundSelf {
+		fail("Failed to find us in peers.json. Maybe we can't peer with this team. Looking for device: %q", prog.Self.Device)
+	}
+
+	fmt.Printf(":: We are: %s\n", prog.SelfPeer.IP)
+	fmt.Printf(":: Found %d other peer(s) in peers.json\n", len(prog.KeybasePeers))
+
+	fmt.Printf(":: Trying to start WireGuard device... You may be asked for `sudo` password.\n")
+
+	prog.SelfPeer.PublicKey = "LhdznlMunOticjwvG+WdHk2f9aYGvXugcrDhG2MJeBA="
 
 	err = kbwg.FindAnnouncements(prog.MCtxTODO())
 	if err != nil {
 		fail("%s", err)
 	}
 
-	if !foundSelf {
-		fail("Failed to find us in peers.txt. Looking for device: %q", prog.Self.Device)
+	// kbwg.SendAnnouncement(prog.MCtxTODO())
+
+	ipMsg := devowner.PipeMsg{
+		ID:      "ip",
+		Payload: prog.SelfPeer.IP,
+	}
+	_ = ipMsg
+
+	wgPeers := kbwg.SerializeWireGuardPeerList(prog.MCtxTODO())
+	peersMsg := devowner.PipeMsg{
+		ID:      "peers",
+		Payload: wgPeers,
+	}
+	peersMsgBytes, err := json.Marshal(peersMsg)
+	fmt.Printf("%s", peersMsgBytes)
+
+	devRun := kbwg.RunDevRunner()
+
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+
+loop:
+	for {
+		select {
+		case <-sigs:
+			fmt.Printf("! Stopping on signal...\n")
+			break loop
+		}
 	}
 
-	// SendAnnouncement(prog.MCtxTODO())
+	devRun.Process.Wait()
+	os.Exit(0)
 }

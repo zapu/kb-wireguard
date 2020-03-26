@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
+	"syscall"
 
 	devowner "github.com/zapu/kb-wireguard/devowner"
 )
@@ -14,19 +16,22 @@ import (
 // down when it exits.
 
 type DevRunnerProcess struct {
-	doneCh chan struct{}
+	DoneCh  chan struct{}
+	Process *os.Process
 }
 
-func RunDevRunner() {
+func RunDevRunner() (ret DevRunnerProcess) {
 	var process DevRunnerProcess
-	process.doneCh = make(chan struct{})
+	process.DoneCh = make(chan struct{})
 
-	cmd := exec.Command("sudo", "./devowner")
+	cmd := exec.Command("sudo", "./run-dev")
 	stdout, _ := cmd.StdoutPipe()
 	stdoutReader := bufio.NewReader(stdout)
 
 	stderr, _ := cmd.StderrPipe()
 	stderrReader := bufio.NewReader(stderr)
+
+	cmd.Stdin = os.Stdin
 
 	go func() {
 		for {
@@ -53,19 +58,29 @@ func RunDevRunner() {
 			if err != nil || len(line) == 0 {
 				continue
 			}
-			fmt.Printf("RunDev: %s\n", line)
+			fmt.Printf("[RunDev]: %s\n", strings.TrimRight(string(line), "\n"))
 
 			// TODO: Push these through channel as well
 		}
 	}()
 
-	go cmd.Run()
+	go func() {
+		select {
+		case <-process.DoneCh:
+			fmt.Printf("[xx] Sending SIGTERM to device owner\n")
+			cmd.Process.Signal(syscall.SIGTERM)
+		}
+	}()
+
+	cmd.Start()
+	ret.Process = cmd.Process
+	return ret
 }
 
 func handleDevRunnerControlMsg(msg devowner.PipeMsg) error {
 	if msg.ID == "pubkey" {
 		pubkey := msg.Payload.(string)
-		fmt.Printf("Received pub key from device runner: %s", pubkey)
+		fmt.Printf("Received pub key from device runner: %s\n", pubkey)
 	}
 	return nil
 }
