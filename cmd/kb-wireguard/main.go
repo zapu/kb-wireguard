@@ -150,12 +150,7 @@ func main() {
 
 	prog.SelfPeer.PublicKey = "LhdznlMunOticjwvG+WdHk2f9aYGvXugcrDhG2MJeBA="
 
-	err = kbwg.FindAnnouncements(prog.MCtxTODO())
-	if err != nil {
-		fail("%s", err)
-	}
-
-	// kbwg.SendAnnouncement(prog.MCtxTODO())
+	go kbwg.AnnouncementsBgTask(prog.MCtxTODO())
 
 	ipMsg := devowner.PipeMsg{
 		ID:      "ip",
@@ -169,7 +164,7 @@ func main() {
 		Payload: wgPeers,
 	}
 	peersMsgBytes, err := json.Marshal(peersMsg)
-	fmt.Printf("%s", peersMsgBytes)
+	fmt.Printf("%s\n", peersMsgBytes)
 
 	devRun := kbwg.RunDevRunner()
 

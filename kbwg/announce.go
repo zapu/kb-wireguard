@@ -14,6 +14,7 @@ type AnnounceMsg struct {
 	// Public key
 	PublicKey string
 	SentAt    time.Time
+	MessageID chat1.MessageID
 }
 
 const AnnounceChatName = "announce"
@@ -47,10 +48,14 @@ func AnnounceFindChat(mctx MetaContext) (ret chat1.ConvSummary, err error) {
 	return ret, fmt.Errorf("Failed to find chat @%s#%s", mctx.Prog.KeybaseTeam, AnnounceChatName)
 }
 
-func FindAnnouncements(mctx MetaContext) error {
-	messages, err := mctx.API().GetTextMessages(mctx.Prog.AnnounceChannel, false)
+// FindAnnouncements queries chat for peer announcement. Call with
+// unreadOnly=false initially to get all recent (not older than 1 hour)
+// announcements. Then periodically call with unreadOnly=true to get new
+// announcements as they are being posted.
+func FindAnnouncements(mctx MetaContext, unreadOnly bool) (newAnncs bool, err error) {
+	messages, err := mctx.API().GetTextMessages(mctx.Prog.AnnounceChannel, unreadOnly)
 	if err != nil {
-		return err
+		return false, err
 	}
 	cutoff := time.Now().Add(-1 * time.Hour)
 	announcementsFound := make(map[KBDev]struct{}) // only take first announcement for each user
@@ -68,16 +73,24 @@ func FindAnnouncements(mctx MetaContext) error {
 			// Sender is not a peer
 			continue
 		}
+
 		if _, alreadyFound := announcementsFound[kbdev]; alreadyFound {
 			// Already had an announcement from this sender.
 			continue
 		}
+
+		if peer.Active && msg.Id == peer.LastAnnouncement.MessageID {
+			// We've already seen this one.
+			continue
+		}
+
 		announcementsFound[kbdev] = struct{}{}
 		parsed, ok := ParseAnnounceMsg(msg.Content.Text.Body)
 		if !ok {
 			continue
 		}
 		parsed.SentAt = sentAt
+		parsed.MessageID = msg.Id
 
 		peer.Active = true
 		peer.Endpoint = parsed.Endpoint
@@ -87,8 +100,9 @@ func FindAnnouncements(mctx MetaContext) error {
 		mctx.Prog.KeybasePeers[kbdev] = peer
 
 		fmt.Printf("+ %v is announcing %q\n", kbdev, msg.Content.Text.Body)
+		newAnncs = true
 	}
-	return nil
+	return newAnncs, nil
 }
 
 func SendAnnouncement(mctx MetaContext) error {
@@ -97,5 +111,32 @@ func SendAnnouncement(mctx MetaContext) error {
 	if err != nil {
 		return fmt.Errorf("SendAnnouncement couldn't SendMessage: %w", err)
 	}
+	return nil
+}
+
+func AnnouncementsBgTask(mctx MetaContext) error {
+	_, err := FindAnnouncements(mctx, false /* unreadOnly */)
+	if err != nil {
+		return err
+	}
+
+loop:
+	for {
+		select {
+		case <-time.After(5 * time.Second):
+		case <-mctx.Ctx.Done():
+			break loop
+		}
+
+		new, err := FindAnnouncements(mctx, true /* unreadOnly */)
+		if err != nil {
+			return err
+		}
+
+		_ = new
+		fmt.Printf(".")
+	}
+
+	fmt.Printf("[X] AnnouncementsBgTask stopping\n")
 	return nil
 }
