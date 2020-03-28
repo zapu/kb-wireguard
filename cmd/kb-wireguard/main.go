@@ -10,6 +10,7 @@ import (
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/zapu/kb-wireguard/kbwg"
+	"github.com/zapu/kb-wireguard/libwireguard"
 
 	"github.com/keybase/go-keybase-chat-bot/kbchat"
 
@@ -71,9 +72,14 @@ func main() {
 		failUsage("`team` argument is required")
 	}
 
+	endpointHostPortArg := libwireguard.ParseHostPort(endpointArg)
+	if endpointHostPortArg.IsNil() {
+		failUsage("`endpoint` argument has to be host:port")
+	}
+
 	prog := &kbwg.Program{}
 	prog.KeybaseTeam = kbTeamArg
-	prog.Endpoint = endpointArg
+	prog.Endpoint = endpointHostPortArg
 
 	var kbc *kbchat.API
 
@@ -120,9 +126,9 @@ func main() {
 
 	var foundSelf bool
 	for _, peer := range peers {
-		kbPeer := kbwg.KeybasePeer{
-			Device: peer.GetKBDev(),
-			IP:     peer.IP,
+		kbPeer, err := peer.MakeKeybasePeer()
+		if err != nil {
+			fail("failed to parse kb peer %v %s:", peer.GetKBDev(), err)
 		}
 
 		if peer.Username == prog.Self.Username && peer.Device == prog.Self.Device {
@@ -146,13 +152,13 @@ func main() {
 
 	fmt.Printf(":: Trying to start WireGuard device... You may be asked for `sudo` password.\n")
 
-	devRun, err := kbwg.RunDevRunner(prog.SelfPeer.IP)
+	devRun, err := kbwg.RunDevRunner(prog.SelfPeer.IP.String())
 	if err != nil {
 		fail("Failed to run dev owner: %s", err)
 	}
 
 	wgPubKey := <-devRun.PubKeyCh
-	prog.SelfPeer.PublicKey = string(wgPubKey)
+	prog.SelfPeer.PublicKey = wgPubKey
 
 	prog.DevRunner = devRun
 

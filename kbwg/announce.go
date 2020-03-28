@@ -7,13 +7,14 @@ import (
 
 	"github.com/keybase/go-keybase-chat-bot/kbchat/types/chat1"
 	"github.com/zapu/kb-wireguard/libpipe"
+	"github.com/zapu/kb-wireguard/libwireguard"
 )
 
 type AnnounceMsg struct {
 	// Peer announces their endpoint, should be ip:port.
-	Endpoint string
+	Endpoint libwireguard.HostPort
 	// Public key
-	PublicKey string
+	PublicKey libwireguard.WireguardPubKey
 	SentAt    time.Time
 	MessageID chat1.MessageID
 }
@@ -21,14 +22,18 @@ type AnnounceMsg struct {
 const AnnounceChatName = "announce"
 
 // ANNOUNCE ip_addr pub_key
-var announceChatMsgRxp = regexp.MustCompile(`ANNOUNCE ([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}:[0-9]{1,5}) (.+)`)
+var announceChatMsgRxp = regexp.MustCompile(`ANNOUNCE ([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}:[0-9]{1,5}) ([a-zA-Z0-9+/]+=?)`)
 
 func ParseAnnounceMsg(msg string) (ret AnnounceMsg, ok bool) {
 	matches := announceChatMsgRxp.FindStringSubmatch(msg)
 	fmt.Printf("+ Parsing %s\n", msg)
 	if len(matches) > 0 {
-		ret.Endpoint = matches[1]
-		ret.PublicKey = matches[2]
+		endpoint := libwireguard.ParseHostPort(matches[1])
+		if endpoint.IsNil() {
+			return ret, false
+		}
+		ret.Endpoint = endpoint
+		ret.PublicKey = libwireguard.WireguardPubKey(matches[2])
 		return ret, true
 	}
 	return ret, false

@@ -5,6 +5,7 @@ import (
 
 	"github.com/keybase/go-keybase-chat-bot/kbchat"
 	"github.com/keybase/go-keybase-chat-bot/kbchat/types/chat1"
+	"github.com/zapu/kb-wireguard/libwireguard"
 )
 
 type Program struct {
@@ -15,7 +16,7 @@ type Program struct {
 
 	KeybaseTeam string
 
-	Endpoint string
+	Endpoint libwireguard.HostPort
 
 	// `KeybasePeers` is a list of peers from peers.json excluding ourselves.
 	// So the actual list of all peers in the VPN is `KeybasePeers` +

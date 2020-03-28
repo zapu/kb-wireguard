@@ -3,6 +3,7 @@ package kbwg
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 
 	"github.com/zapu/kb-wireguard/libwireguard"
 )
@@ -27,10 +28,10 @@ type KeybasePeer struct {
 
 	// IP address for the peer. If we hear an announcement from that peer, we
 	// will give them this address.
-	IP string `json:"ip"`
+	IP net.IP `json:"ip"`
 
 	// Wireguard public key
-	PublicKey string `json:"public_key"`
+	PublicKey libwireguard.WireguardPubKey `json:"public_key"`
 
 	// MulticastID is randomized, announced by each peers, used for finding one
 	// another in LAN. (TODO: Just a though. Of course it's not even started to
@@ -39,7 +40,7 @@ type KeybasePeer struct {
 
 	// Endpoint to reach the peer. Either from the announcement, on from LAN
 	// discovery (LAN not implemented).
-	Endpoint string
+	Endpoint libwireguard.HostPort
 
 	LastAnnouncement AnnounceMsg
 }
@@ -55,6 +56,16 @@ func (p PeerJSON) GetKBDev() KBDev {
 		Username: p.Username,
 		Device:   p.Device,
 	}
+}
+
+func (p PeerJSON) MakeKeybasePeer() (ret KeybasePeer, err error) {
+	ip := net.ParseIP(p.IP)
+	if ip == nil {
+		return ret, fmt.Errorf("invalid IP format")
+	}
+	ret.IP = ip
+	ret.Device = p.GetKBDev()
+	return ret, nil
 }
 
 func LoadPeerList(mctx MetaContext) (peers []PeerJSON, err error) {
@@ -79,9 +90,9 @@ func SerializeWireGuardPeerList(mctx MetaContext) (ret []libwireguard.WireguardP
 
 		label := fmt.Sprintf("%s (%s)", v.Device.Username, v.Device.Device)
 		ret = append(ret, libwireguard.WireguardPeer{
-			PublicKey:  libwireguard.WireguardPubKey(v.PublicKey),
-			AllowedIPs: v.IP,
-			Endpoint:   v.Endpoint,
+			PublicKey:  string(v.PublicKey),
+			AllowedIPs: v.IP.String(),
+			Endpoint:   v.Endpoint.String(),
 			Label:      label,
 		})
 	}

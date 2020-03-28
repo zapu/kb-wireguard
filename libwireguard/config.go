@@ -13,7 +13,12 @@ type WireguardConfig struct {
 }
 
 type WireguardPeer struct {
-	PublicKey  WireguardPubKey
+	// NOTE: These are strings instead of complex types like net.IP or HostPort
+	// because we are sending these through pipe in JSON format. net.IP sent in
+	// JSON would become a base64 buffer and we want to keep things readable
+	// (debuggable) for now.
+
+	PublicKey  string
 	AllowedIPs string
 	Endpoint   string
 
