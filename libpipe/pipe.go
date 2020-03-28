@@ -4,7 +4,7 @@ import "encoding/json"
 
 type PipeMsg struct {
 	ID      string `json:"i"`
-	Payload []byte `json:"p"`
+	Payload string `json:"p"`
 }
 
 func SerializeMsgInterface(ID string, obj interface{}) (ret string, err error) {
@@ -12,14 +12,10 @@ func SerializeMsgInterface(ID string, obj interface{}) (ret string, err error) {
 	if err != nil {
 		return "", err
 	}
-	return SerializeMsgBytes(ID, objBytes)
+	return SerializeMsgString(ID, string(objBytes))
 }
 
 func SerializeMsgString(ID string, val string) (ret string, err error) {
-	return SerializeMsgBytes(ID, []byte(val))
-}
-
-func SerializeMsgBytes(ID string, val []byte) (ret string, err error) {
 	pMsg := PipeMsg{
 		ID:      ID,
 		Payload: val,

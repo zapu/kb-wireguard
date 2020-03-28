@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"context"
+	"encoding/json"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -62,21 +66,53 @@ func serializeToStdout(id string, payload interface{}) {
 	if err != nil {
 		fail("libpipe fail: %s", err)
 	}
-
+	fmt.Printf("%s\n", msg)
 }
 
 func debug(format string, args ...interface{}) {
 	fmt.Fprintf(os.Stderr, format+"\n", args...)
 }
 
-func main() {
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+func messageReaderTask(ctx context.Context, pipeFilename string, ch chan libpipe.PipeMsg) error {
+	fd, err := os.OpenFile(pipeFilename, os.O_RDONLY, os.ModeNamedPipe)
+	if err != nil {
+		return err
+	}
 
+	defer fd.Close()
+
+	stdinReader := bufio.NewReader(fd)
+
+	debug("Opened read side of pipe %s", pipeFilename)
+
+	for {
+		line, err := stdinReader.ReadBytes('\n')
+		if err != nil {
+			return err
+		}
+		var pipeMsg libpipe.PipeMsg
+		err = json.Unmarshal(line, &pipeMsg)
+		if err != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+		ch <- pipeMsg
+	}
+}
+
+func main() {
 	debug(`Hello from device runner ("run-dev"): %d %d`, os.Getuid(), os.Geteuid())
 	if os.Getuid() != 0 {
 		fail("Needs to run as root to control wireguard...")
 	}
+
+	var pipeFilename string
+	flag.StringVar(&pipeFilename, "pipe", "", "")
+	flag.Parse()
 
 	privKey, pubKey, err := devowner.WireguardGenKey()
 	if err != nil {
@@ -91,6 +127,11 @@ func main() {
 	var conf libwireguard.WireguardConfig
 	conf.PrivateKey = privKey
 	conf.ListenPort = 51820
+
+	// The moment we start doing things that need cleanups, start handling
+	// signals.
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
 	tmpfile, err := ioutil.TempFile("", fmt.Sprintf("%s.*.conf", deviceName))
 	if err != nil {
@@ -128,15 +169,31 @@ func main() {
 		debug("Set ip address to %s", ipAddr)
 	}
 
+	msgCh := make(chan libpipe.PipeMsg)
+	readCtx, cancelRead := context.WithCancel(context.Background())
+	if pipeFilename != "" {
+		go func() {
+			err := messageReaderTask(readCtx, pipeFilename, msgCh)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error from messageReaderTask: %s\n", err)
+			}
+		}()
+	} else {
+		debug("Pipe filename not provided - no messages will be received, but continuing anyway.")
+	}
+
 loop:
 	for {
 		select {
 		case <-sigs:
 			debug("Stopping on signal...")
 			break loop
+		case msg := <-msgCh:
+			debug("Got msg: %s %d", string(msg.Payload), len(string(msg.Payload)))
 		}
 	}
 
+	cancelRead()
 	debug("Removing device %s", deviceName)
 
 	_, err = sudoExec("ip", "link", "delete", "dev", deviceName)
