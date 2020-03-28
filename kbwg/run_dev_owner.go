@@ -51,7 +51,7 @@ func makePipe() (string, error) {
 	return name, err
 }
 
-func RunDevRunner() (ret *DevRunnerProcess, err error) {
+func RunDevRunner(ipAddr string) (ret *DevRunnerProcess, err error) {
 	ret = &DevRunnerProcess{}
 	ret.DoneCh = make(chan struct{})
 	ret.PubKeyCh = make(chan libwireguard.WireguardPubKey)
@@ -61,7 +61,12 @@ func RunDevRunner() (ret *DevRunnerProcess, err error) {
 		return nil, fmt.Errorf("Failed to make pipe: %w", err)
 	}
 
-	cmd := exec.Command("sudo", "./run-dev", "-pipe", wrPipeFilename)
+	args := []string{"sudo", "./run-dev", "-pipe", wrPipeFilename}
+	if ipAddr != "" {
+		args = append(args, "-ip", ipAddr)
+	}
+
+	cmd := exec.Command(args[0], args[1:]...)
 	ret.cmd = cmd
 
 	stdout, err := cmd.StdoutPipe()
@@ -134,7 +139,11 @@ func RunDevRunner() (ret *DevRunnerProcess, err error) {
 
 func (runner *DevRunnerProcess) handleDevRunnerControlMsg(msg libpipe.PipeMsg) error {
 	if msg.ID == "pubkey" {
-		pubkey := libwireguard.WireguardPubKey(msg.Payload)
+		var pubkey libwireguard.WireguardPubKey
+		err := json.Unmarshal([]byte(msg.Payload), &pubkey)
+		if err != nil {
+			return err
+		}
 		fmt.Printf("Received pub key from device runner: %s\n", pubkey)
 		runner.PubKeyCh <- pubkey
 	}

@@ -10,7 +10,6 @@ import (
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/zapu/kb-wireguard/kbwg"
-	"github.com/zapu/kb-wireguard/libpipe"
 
 	"github.com/keybase/go-keybase-chat-bot/kbchat"
 
@@ -147,24 +146,18 @@ func main() {
 
 	fmt.Printf(":: Trying to start WireGuard device... You may be asked for `sudo` password.\n")
 
-	devRun, err := kbwg.RunDevRunner()
+	devRun, err := kbwg.RunDevRunner(prog.SelfPeer.IP)
 	if err != nil {
 		fail("Failed to run dev owner: %s", err)
 	}
+
 	wgPubKey := <-devRun.PubKeyCh
+	prog.SelfPeer.PublicKey = string(wgPubKey)
 
 	prog.DevRunner = devRun
 
-	prog.SelfPeer.PublicKey = string(wgPubKey)
-
 	go kbwg.AnnouncementsBgTask(prog.MCtxTODO())
 	go kbwg.SelfAnnouncementBgTask(prog.MCtxTODO())
-
-	ipMsg := libpipe.PipeMsg{
-		ID:      "ip",
-		Payload: prog.SelfPeer.IP,
-	}
-	_ = ipMsg
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
@@ -180,7 +173,7 @@ loop:
 
 	devRun.Process.Wait()
 
-	fmt.Printf("[X] kb-wireguard exiting...\n")
+	fmt.Printf(":: kb-wireguard exiting...\n")
 
 	os.Exit(0)
 }

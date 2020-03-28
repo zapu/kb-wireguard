@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/zapu/kb-wireguard/devowner"
 	"github.com/zapu/kb-wireguard/libpipe"
@@ -103,6 +104,67 @@ func messageReaderTask(ctx context.Context, pipeFilename string, ch chan libpipe
 	}
 }
 
+type DeviceOwnerProgram struct {
+	IPAddress string
+
+	ConfigFilename string
+	Config         libwireguard.WireguardConfig
+
+	signals chan os.Signal
+	msgCh   chan libpipe.PipeMsg
+}
+
+func (prog *DeviceOwnerProgram) mainLoop() {
+	for {
+		select {
+		case <-prog.signals:
+			debug("Stopping on signal...")
+			return
+		case msg := <-prog.msgCh:
+			debug("Got msg: %s %d", string(msg.Payload), len(string(msg.Payload)))
+			if msg.ID == "peers" {
+				err := prog.handlePeersMessage(msg)
+				if err != nil {
+					debug("Failed to handler peers msg:", err)
+				}
+			}
+		}
+	}
+}
+
+func (prog *DeviceOwnerProgram) handlePeersMessage(msg libpipe.PipeMsg) error {
+	var newPeers []libwireguard.WireguardPeer
+	err := json.Unmarshal([]byte(msg.Payload), &newPeers)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal: %w", err)
+	}
+	prog.Config.Peers = newPeers
+	return prog.flushConfig()
+}
+
+func (prog *DeviceOwnerProgram) flushConfig() error {
+	cfgFile, err := os.OpenFile(prog.ConfigFilename, os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	if _, err := cfgFile.Write([]byte(libwireguard.SerializeConfig(prog.Config))); err != nil {
+		return fmt.Errorf("failed to Write: %w", err)
+	}
+
+	cfgFile.WriteString(fmt.Sprintf("\n# Config edited at: %s\n", time.Now().Local()))
+
+	if err := cfgFile.Close(); err != nil {
+		return fmt.Errorf("failed to Close: %w", err)
+	}
+
+	_, err = sudoExec("wg", "syncconf", "kbwg0", prog.ConfigFilename)
+	if err != nil {
+		return fmt.Errorf("failed to 'wg syncconf': %w", err)
+	}
+
+	return nil
+}
+
 func main() {
 	debug(`Hello from device runner ("run-dev"): %d %d`, os.Getuid(), os.Geteuid())
 	if os.Getuid() != 0 {
@@ -110,7 +172,9 @@ func main() {
 	}
 
 	var pipeFilename string
+	var initialIPAddress string
 	flag.StringVar(&pipeFilename, "pipe", "", "")
+	flag.StringVar(&initialIPAddress, "ip", "", "")
 	flag.Parse()
 
 	privKey, pubKey, err := devowner.WireguardGenKey()
@@ -123,19 +187,25 @@ func main() {
 
 	serializeToStdout("pubkey", pubKey)
 
+	prog := &DeviceOwnerProgram{}
+
 	var conf libwireguard.WireguardConfig
 	conf.PrivateKey = privKey
 	conf.ListenPort = 51820
 
+	prog.Config = conf
+
 	// The moment we start doing things that need cleanups, start handling
 	// signals.
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	prog.signals = make(chan os.Signal, 1)
+	signal.Notify(prog.signals, syscall.SIGINT, syscall.SIGTERM)
 
 	tmpfile, err := ioutil.TempFile("", fmt.Sprintf("%s.*.conf", deviceName))
 	if err != nil {
 		fail("%s", err)
 	}
+
+	prog.ConfigFilename = tmpfile.Name()
 
 	debug(":: Config filename: %s", tmpfile.Name())
 	defer os.Remove(tmpfile.Name())
@@ -160,19 +230,28 @@ func main() {
 		debug("Failed to setconf: %s", err)
 	}
 
-	ipAddr := "101.0.0.1/24"
-	_, err = sudoExec("ip", "address", "add", "dev", deviceName, ipAddr)
-	if err != nil {
-		debug("Failed to set ip: %s", err)
+	if initialIPAddress != "" {
+		ipAddr := initialIPAddress + "/24"
+		_, err = sudoExec("ip", "address", "add", "dev", deviceName, ipAddr)
+		if err != nil {
+			debug("Failed to set ip: %s", err)
+		} else {
+			debug("Set ip address to %s", ipAddr)
+		}
+
+		_, err = sudoExec("ip", "link", "set", "up", "dev", deviceName)
+		if err != nil {
+			debug("failed to bring the interface up: %s", err)
+		}
 	} else {
-		debug("Set ip address to %s", ipAddr)
+		debug("-ip flag not provided, not setting ip address")
 	}
 
-	msgCh := make(chan libpipe.PipeMsg)
+	prog.msgCh = make(chan libpipe.PipeMsg)
 	readCtx, cancelRead := context.WithCancel(context.Background())
 	if pipeFilename != "" {
 		go func() {
-			err := messageReaderTask(readCtx, pipeFilename, msgCh)
+			err := messageReaderTask(readCtx, pipeFilename, prog.msgCh)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error from messageReaderTask: %s\n", err)
 			}
@@ -181,16 +260,7 @@ func main() {
 		debug("Pipe filename not provided - no messages will be received, but continuing anyway.")
 	}
 
-loop:
-	for {
-		select {
-		case <-sigs:
-			debug("Stopping on signal...")
-			break loop
-		case msg := <-msgCh:
-			debug("Got msg: %s %d", string(msg.Payload), len(string(msg.Payload)))
-		}
-	}
+	prog.mainLoop()
 
 	cancelRead()
 	debug("Removing device %s", deviceName)

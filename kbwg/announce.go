@@ -80,7 +80,7 @@ func FindAnnouncements(mctx MetaContext, unreadOnly bool) (newAnncs bool, err er
 			continue
 		}
 
-		if peer.Active && msg.Id == peer.LastAnnouncement.MessageID {
+		if peer.Active && msg.Id <= peer.LastAnnouncement.MessageID {
 			// We've already seen this one.
 			continue
 		}
@@ -100,7 +100,7 @@ func FindAnnouncements(mctx MetaContext, unreadOnly bool) (newAnncs bool, err er
 		peer.LastAnnouncement = parsed
 		mctx.Prog.KeybasePeers[kbdev] = peer
 
-		fmt.Printf("+ %v is announcing %q\n", kbdev, msg.Content.Text.Body)
+		fmt.Printf("+ %v is announcing %q (msg ID: %d)\n", kbdev, msg.Content.Text.Body, msg.Id)
 		newAnncs = true
 	}
 	return newAnncs, nil
@@ -122,6 +122,7 @@ func AnnouncementsBgTask(mctx MetaContext) error {
 	}
 
 	wgPeers := SerializeWireGuardPeerList(mctx)
+	fmt.Printf("Doing initial sync for peer list with %d peer(s).\n", len(wgPeers))
 	peersMsg, _ := libpipe.SerializeMsgInterface("peers", wgPeers)
 	mctx.Prog.DevRunner.WriteLine(peersMsg)
 
@@ -138,7 +139,12 @@ loop:
 			return err
 		}
 
-		_ = new
+		if new {
+			wgPeers := SerializeWireGuardPeerList(mctx)
+			fmt.Printf("Got new announcements, syncing peer list with %d peer(s).\n", len(wgPeers))
+			peersMsg, _ := libpipe.SerializeMsgInterface("peers", wgPeers)
+			mctx.Prog.DevRunner.WriteLine(peersMsg)
+		}
 	}
 
 	fmt.Printf("[X] AnnouncementsBgTask stopping\n")
