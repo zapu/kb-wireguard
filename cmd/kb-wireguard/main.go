@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/zapu/kb-wireguard/kbwg"
@@ -154,22 +153,18 @@ func main() {
 	}
 	wgPubKey := <-devRun.PubKeyCh
 
+	prog.DevRunner = devRun
+
 	prog.SelfPeer.PublicKey = string(wgPubKey)
 
 	go kbwg.AnnouncementsBgTask(prog.MCtxTODO())
-
-	time.Sleep(3 * time.Second)
-	// kbwg.SendAnnouncement(prog.MCtxTODO())
+	go kbwg.SelfAnnouncementBgTask(prog.MCtxTODO())
 
 	ipMsg := libpipe.PipeMsg{
 		ID:      "ip",
 		Payload: prog.SelfPeer.IP,
 	}
 	_ = ipMsg
-
-	wgPeers := kbwg.SerializeWireGuardPeerList(prog.MCtxTODO())
-	peersMsg, _ := libpipe.SerializeMsgInterface("peers", wgPeers)
-	devRun.WriteLine(peersMsg)
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
@@ -184,5 +179,8 @@ loop:
 	}
 
 	devRun.Process.Wait()
+
+	fmt.Printf("[X] kb-wireguard exiting...\n")
+
 	os.Exit(0)
 }

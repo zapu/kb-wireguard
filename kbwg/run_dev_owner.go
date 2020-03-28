@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/zapu/kb-wireguard/libpipe"
@@ -24,6 +25,7 @@ type DevRunnerProcess struct {
 	PubKeyCh chan libwireguard.WireguardPubKey
 
 	PipeWriter *bufio.Writer
+	pipeLock   sync.Mutex
 
 	cmd *exec.Cmd
 }
@@ -118,15 +120,14 @@ func RunDevRunner() (ret *DevRunnerProcess, err error) {
 	cmd.Start()
 	ret.Process = cmd.Process
 
-	go func() {
+	{
 		fd, err := os.OpenFile(wrPipeFilename, os.O_WRONLY, os.ModeNamedPipe)
 		if err != nil {
-			fmt.Printf("Failed to open pipe: %s\n", err)
-			return
+			return ret, fmt.Errorf("failed to open pipe: %w", err)
 		}
 		fmt.Printf("[%%] Opened write side of pipe: %s\n", wrPipeFilename)
 		ret.PipeWriter = bufio.NewWriter(fd)
-	}()
+	}
 
 	return ret, nil
 }
@@ -141,6 +142,8 @@ func (runner *DevRunnerProcess) handleDevRunnerControlMsg(msg libpipe.PipeMsg) e
 }
 
 func (runner *DevRunnerProcess) WriteLine(str string) {
+	runner.pipeLock.Lock()
+	defer runner.pipeLock.Unlock()
 	runner.PipeWriter.WriteString(str + "\n")
 	runner.PipeWriter.Flush()
 }

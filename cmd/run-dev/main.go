@@ -95,10 +95,9 @@ func messageReaderTask(ctx context.Context, pipeFilename string, ch chan libpipe
 		if err != nil {
 			return err
 		}
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
+		err = ctx.Err()
+		if err != nil {
+			return err
 		}
 		ch <- pipeMsg
 	}
@@ -200,4 +199,6 @@ loop:
 	if err != nil {
 		fail("%s", err)
 	}
+
+	debug("Device removed... exiting")
 }

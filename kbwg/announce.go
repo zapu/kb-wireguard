@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/keybase/go-keybase-chat-bot/kbchat/types/chat1"
+	"github.com/zapu/kb-wireguard/libpipe"
 )
 
 type AnnounceMsg struct {
@@ -120,6 +121,10 @@ func AnnouncementsBgTask(mctx MetaContext) error {
 		return err
 	}
 
+	wgPeers := SerializeWireGuardPeerList(mctx)
+	peersMsg, _ := libpipe.SerializeMsgInterface("peers", wgPeers)
+	mctx.Prog.DevRunner.WriteLine(peersMsg)
+
 loop:
 	for {
 		select {
@@ -134,9 +139,27 @@ loop:
 		}
 
 		_ = new
-		fmt.Printf(".")
 	}
 
 	fmt.Printf("[X] AnnouncementsBgTask stopping\n")
 	return nil
+}
+
+func SelfAnnouncementBgTask(mctx MetaContext) error {
+	err := SendAnnouncement(mctx)
+	if err != nil {
+		return fmt.Errorf("failed to SendAnnouncement: %w", err)
+	}
+
+	for {
+		select {
+		case <-time.After(30 * time.Minute):
+			err := SendAnnouncement(mctx)
+			if err != nil {
+				return fmt.Errorf("failed to SendAnnouncement: %w", err)
+			}
+		case <-mctx.Ctx.Done():
+			return mctx.Ctx.Err()
+		}
+	}
 }

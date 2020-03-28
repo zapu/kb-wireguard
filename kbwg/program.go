@@ -25,6 +25,8 @@ type Program struct {
 	KeybasePeers map[KBDev]KeybasePeer
 
 	AnnounceChannel chat1.ChatChannel
+
+	DevRunner *DevRunnerProcess
 }
 
 type MetaContext struct {
