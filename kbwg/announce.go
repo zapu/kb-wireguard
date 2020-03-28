@@ -58,12 +58,12 @@ func FindAnnouncements(mctx MetaContext, unreadOnly bool) (newAnncs bool, err er
 	if err != nil {
 		return false, err
 	}
+	// Do not read anything older than hour.
 	cutoff := time.Now().Add(-1 * time.Hour)
-	announcementsFound := make(map[KBDev]struct{}) // only take first announcement for each user
 	for _, msg := range messages {
 		sentAt := time.Unix(msg.SentAt, 0)
 		if sentAt.Before(cutoff) {
-			// break
+			break
 		}
 		kbdev := KBDev{
 			Device:   msg.Sender.DeviceName,
@@ -75,17 +75,11 @@ func FindAnnouncements(mctx MetaContext, unreadOnly bool) (newAnncs bool, err er
 			continue
 		}
 
-		if _, alreadyFound := announcementsFound[kbdev]; alreadyFound {
-			// Already had an announcement from this sender.
-			continue
-		}
-
 		if peer.Active && msg.Id <= peer.LastAnnouncement.MessageID {
 			// We've already seen this one.
 			continue
 		}
 
-		announcementsFound[kbdev] = struct{}{}
 		parsed, ok := ParseAnnounceMsg(msg.Content.Text.Body)
 		if !ok {
 			continue
