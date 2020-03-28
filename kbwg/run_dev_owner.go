@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	devowner "github.com/zapu/kb-wireguard/devowner"
+	"github.com/zapu/kb-wireguard/libwireguard"
 )
 
 // Run process that sets up and "owns" the wireguard device, and also tears it
@@ -18,11 +19,13 @@ import (
 type DevRunnerProcess struct {
 	DoneCh  chan struct{}
 	Process *os.Process
+
+	PubKeyCh chan libwireguard.WireguardPubKey
 }
 
 func RunDevRunner() (ret DevRunnerProcess) {
-	var process DevRunnerProcess
-	process.DoneCh = make(chan struct{})
+	ret.DoneCh = make(chan struct{})
+	ret.PubKeyCh = make(chan libwireguard.WireguardPubKey)
 
 	cmd := exec.Command("sudo", "./run-dev")
 	stdout, _ := cmd.StdoutPipe()
@@ -66,7 +69,7 @@ func RunDevRunner() (ret DevRunnerProcess) {
 
 	go func() {
 		select {
-		case <-process.DoneCh:
+		case <-ret.DoneCh:
 			fmt.Printf("[xx] Sending SIGTERM to device owner\n")
 			cmd.Process.Signal(syscall.SIGTERM)
 		}
@@ -79,7 +82,11 @@ func RunDevRunner() (ret DevRunnerProcess) {
 
 func handleDevRunnerControlMsg(msg devowner.PipeMsg) error {
 	if msg.ID == "pubkey" {
-		pubkey := msg.Payload.(string)
+		var pubkey libwireguard.WireguardPubKey
+		err := json.Unmarshal(msg.Payload, &pubkey)
+		if err != nil {
+			return fmt.Errorf("Failed to unmarshal payload: %w", err)
+		}
 		fmt.Printf("Received pub key from device runner: %s\n", pubkey)
 	}
 	return nil

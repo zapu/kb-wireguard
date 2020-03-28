@@ -10,7 +10,6 @@ import (
 	"syscall"
 
 	"github.com/davecgh/go-spew/spew"
-	"github.com/zapu/kb-wireguard/devowner"
 	"github.com/zapu/kb-wireguard/kbwg"
 
 	"github.com/keybase/go-keybase-chat-bot/kbchat"
@@ -148,25 +147,26 @@ func main() {
 
 	fmt.Printf(":: Trying to start WireGuard device... You may be asked for `sudo` password.\n")
 
+	devRun := kbwg.RunDevRunner()
+
 	prog.SelfPeer.PublicKey = "LhdznlMunOticjwvG+WdHk2f9aYGvXugcrDhG2MJeBA="
 
 	go kbwg.AnnouncementsBgTask(prog.MCtxTODO())
 
-	ipMsg := devowner.PipeMsg{
+	ipMsg := libpipe.PipeMsg{
 		ID:      "ip",
-		Payload: prog.SelfPeer.IP,
+		Payload: []byte(prog.SelfPeer.IP),
 	}
 	_ = ipMsg
 
 	wgPeers := kbwg.SerializeWireGuardPeerList(prog.MCtxTODO())
-	peersMsg := devowner.PipeMsg{
+	_ = wgPeers
+	peersMsg := libpipe.PipeMsg{
 		ID:      "peers",
-		Payload: wgPeers,
+		Payload: []byte{}, // TODO FIXME //wgPeers,
 	}
 	peersMsgBytes, err := json.Marshal(peersMsg)
 	fmt.Printf("%s\n", peersMsgBytes)
-
-	devRun := kbwg.RunDevRunner()
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
