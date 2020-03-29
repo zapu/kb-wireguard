@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strings"
@@ -15,17 +16,30 @@ func failOnErr(err error, msg string) {
 	}
 }
 
-func main() {
-	conn, err := net.Dial("udp", "100.0.0.255:7777")
-	failOnErr(err, "UDP dial")
+const Port = 7777
 
+func broadcast(line string, stderr io.Writer) {
+	var s byte
+	for s = 1; s < 255; s++ {
+		ip := net.IPv4(100, 0, 0, s)
+		conn, err := net.Dial("udp", fmt.Sprintf("%s:%d", ip.String(), Port))
+		if err != nil {
+			fmt.Fprintf(stderr, "Failed to dial to %s\n", ip)
+			continue
+		}
+		_, err = conn.Write([]byte(line))
+		if err != nil {
+			continue
+		}
+	}
+}
+
+func main() {
 	addr := &net.UDPAddr{
-		Port: 7777,
+		Port: Port,
 	}
 	listener, err := net.ListenUDP("udp", addr)
 	failOnErr(err, "ListenUDP")
-
-	_ = conn
 
 	rl, err := readline.New("> ")
 	failOnErr(err, "readline.New")
@@ -49,10 +63,6 @@ func main() {
 		if err != nil {
 			break
 		}
-		fmt.Printf("%s\n", line)
-		_, err = conn.Write([]byte(line))
-		if err != nil {
-			fmt.Fprintf(rl.Stderr(), "Failed to send: %s\n", err)
-		}
+		broadcast(line, rl.Stderr())
 	}
 }
