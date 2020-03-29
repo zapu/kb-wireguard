@@ -29,7 +29,7 @@ func SerializeConfig(conf WireguardConfig) string {
 	var builder strings.Builder
 	builder.WriteString("[Interface]\n")
 	builder.WriteString(fmt.Sprintf("ListenPort = %d\n", conf.ListenPort))
-	builder.WriteString(fmt.Sprintf("PrivateKey = %s\n", conf.PrivateKey))
+	builder.WriteString(fmt.Sprintf("PrivateKey = %s\n", string(conf.PrivateKey)))
 	builder.WriteString("\n")
 
 	for _, peer := range conf.Peers {

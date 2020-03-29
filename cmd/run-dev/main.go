@@ -162,6 +162,7 @@ func (prog *DeviceOwnerProgram) flushConfig() error {
 		return fmt.Errorf("failed to 'wg syncconf': %w", err)
 	}
 
+	debug("syncconf successful")
 	return nil
 }
 
