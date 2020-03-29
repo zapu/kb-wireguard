@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/chzyer/readline"
 )
@@ -18,28 +19,41 @@ func failOnErr(err error, msg string) {
 
 const Port = 7777
 
-func broadcast(line string, stderr io.Writer) {
+// Magic marks lan-chat packets so we can filter other noise that might be
+// coming on the port.
+const Magic = "😹"
+
+var Conns []net.Conn
+
+func makeConns() {
 	var s byte
 	for s = 1; s < 255; s++ {
 		ip := net.IPv4(100, 0, 0, s)
 		conn, err := net.Dial("udp", fmt.Sprintf("%s:%d", ip.String(), Port))
 		if err != nil {
-			fmt.Fprintf(stderr, "Failed to dial to %s\n", ip)
+			fmt.Fprintf(os.Stderr, "Failed to dial to %s: %s\n", ip, err)
 			continue
 		}
-		_, err = conn.Write([]byte(line))
-		if err != nil {
-			continue
-		}
+		Conns = append(Conns, conn)
+	}
+}
+
+func broadcast(line string, stderr io.Writer) {
+	for _, conn := range Conns {
+		_, _ = conn.Write(append([]byte(Magic), []byte(line)...))
 	}
 }
 
 func main() {
+	_, magicSize := utf8.DecodeRuneInString(Magic)
+
 	addr := &net.UDPAddr{
 		Port: Port,
 	}
 	listener, err := net.ListenUDP("udp", addr)
 	failOnErr(err, "ListenUDP")
+
+	makeConns()
 
 	rl, err := readline.New("> ")
 	failOnErr(err, "readline.New")
@@ -53,8 +67,12 @@ func main() {
 				fmt.Fprintf(os.Stderr, "Failed ReadFromUDP: %s\n", err)
 				continue
 			}
-			str := strings.TrimSpace(string(buffer[:n]))
-			fmt.Fprintf(rl.Stdout(), "[%s]: %s\n", from.IP.String(), str)
+			line := string(buffer[:n])
+			// fmt.Fprintf(rl.Stdout(), "[%s]: %s\n", from.IP.String(), str)
+			if strings.HasPrefix(line, Magic) {
+				str := strings.TrimSpace(line[magicSize:])
+				fmt.Fprintf(rl.Stdout(), "[%s]: %s\n", from.IP.String(), str)
+			}
 		}
 	}()
 
