@@ -174,6 +174,8 @@ func main() {
 
 	var pipeFilename string
 	var initialIPAddress string
+	var portArg int
+	flag.IntVar(&portArg, "port", 51820, "")
 	flag.StringVar(&pipeFilename, "pipe", "", "")
 	flag.StringVar(&initialIPAddress, "ip", "", "")
 	flag.Parse()
@@ -192,7 +194,7 @@ func main() {
 
 	var conf libwireguard.WireguardConfig
 	conf.PrivateKey = privKey
-	conf.ListenPort = 51820
+	conf.ListenPort = uint16(portArg)
 
 	prog.Config = conf
 

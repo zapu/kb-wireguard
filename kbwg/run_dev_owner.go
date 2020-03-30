@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -51,7 +52,7 @@ func makePipe() (string, error) {
 	return name, err
 }
 
-func RunDevRunner(ipAddr string) (ret *DevRunnerProcess, err error) {
+func RunDevRunner(ipAddr string, bindPort uint16) (ret *DevRunnerProcess, err error) {
 	ret = &DevRunnerProcess{}
 	ret.DoneCh = make(chan struct{})
 	ret.PubKeyCh = make(chan libwireguard.WireguardPubKey)
@@ -65,7 +66,11 @@ func RunDevRunner(ipAddr string) (ret *DevRunnerProcess, err error) {
 	if ipAddr != "" {
 		args = append(args, "-ip", ipAddr)
 	}
+	if bindPort != 0 {
+		args = append(args, "-port", strconv.Itoa(int(bindPort)))
+	}
 
+	fmt.Printf("Running: %v\n", args)
 	cmd := exec.Command(args[0], args[1:]...)
 	ret.cmd = cmd
 

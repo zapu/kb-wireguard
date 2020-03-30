@@ -61,8 +61,10 @@ func main() {
 
 	var endpointArg string
 	var kbTeamArg string
+	var portArg int
 	flag.StringVar(&endpointArg, "endpoint", "", "Public endpoint for this machine. Will be announced to other peers.")
 	flag.StringVar(&kbTeamArg, "team", "", "Keybase team name to coordinate peering with. Each team can be considered a separate VPN where team members can connect to each other.")
+	flag.IntVar(&portArg, "port", 51820, "Port to bind to.")
 	flag.Parse()
 
 	if endpointArg == "" {
@@ -71,7 +73,6 @@ func main() {
 	if kbTeamArg == "" {
 		failUsage("`team` argument is required")
 	}
-
 	endpointHostPortArg := libwireguard.ParseHostPort(endpointArg)
 	if endpointHostPortArg.IsNil() {
 		failUsage("`endpoint` argument has to be host:port")
@@ -152,7 +153,7 @@ func main() {
 
 	fmt.Printf(":: Trying to start WireGuard device... You may be asked for `sudo` password.\n")
 
-	devRun, err := kbwg.RunDevRunner(prog.SelfPeer.IP.String())
+	devRun, err := kbwg.RunDevRunner(prog.SelfPeer.IP.String(), uint16(portArg))
 	if err != nil {
 		fail("Failed to run dev owner: %s", err)
 	}

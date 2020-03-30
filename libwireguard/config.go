@@ -18,9 +18,10 @@ type WireguardPeer struct {
 	// JSON would become a base64 buffer and we want to keep things readable
 	// (debuggable) for now.
 
-	PublicKey  string
-	AllowedIPs string
-	Endpoint   string
+	PublicKey           string
+	AllowedIPs          string
+	Endpoint            string
+	PersistentKeepalive int
 
 	Label string
 }
@@ -40,6 +41,9 @@ func SerializeConfig(conf WireguardConfig) string {
 		builder.WriteString(fmt.Sprintf("PublicKey = %s\n", peer.PublicKey))
 		builder.WriteString(fmt.Sprintf("AllowedIPs = %s\n", peer.AllowedIPs))
 		builder.WriteString(fmt.Sprintf("Endpoint = %s\n", peer.Endpoint))
+		if peer.PersistentKeepalive != 0 {
+			builder.WriteString(fmt.Sprintf("PersistentKeepalive = %d\n", peer.PersistentKeepalive))
+		}
 		builder.WriteString("\n")
 	}
 
