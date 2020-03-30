@@ -21,6 +21,8 @@ Example `peers.json`:
 
 IP addresses are mapped per device (not per user). This way, a single user can use this to connect all of their devices, no matter where physically they are and what public network they are connected to.
 
+The convention is to use `100.0.0.x` addresses but that's not a technical requirement, it's simply a quick&dirty design decision.
+
 ### Benefits of using Keybase
 
 There is a central resource that can store peering source of truth that's protected by users' and teams' signature chains. Keybase can't inject new peers into users' VPNs.
@@ -55,6 +57,11 @@ They are being exchanged using "CHAT" topic type for easier debugging, but the p
 - `kbwg/run_dev_owner.go` - Runs and communicates with `run-dev` program. `run-dev` is ran with stdin passed from `kb-wireguard` process so interactive `sudo` works.
 - `libpipe` - Types and functions for `kb-wireguard` and `run-dev` to communicate through named pipe.
 - `libwireguard` - More helper functions and types to interact with WireGuard config file and `wg` command.
+
+Additionally, not required by `kb-wireguard` to function:
+
+- `cmd/lan-chat` - Test program that broadcasts to UDP messages to all 100.0.0.x IP addresses *(NOTE: WireGuard does not support 100.0.0.255 broadcast address by design)*, and listens as well.
+- `cmd/stun-test` - Contacts Google STUN server to discover IP and port, prints that to stdout, does an UDP listen on that port for testing.
 
 ### Problems / TODOs
 
