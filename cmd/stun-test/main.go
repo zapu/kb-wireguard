@@ -6,7 +6,6 @@ import (
 	"net"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/davecgh/go-spew/spew"
 	"gortc.io/stun"
@@ -39,7 +38,7 @@ func chatLoop(laddr *net.UDPAddr) {
 
 func main() {
 	// randomize port
-	rand.Seed(time.Now().UnixNano())
+	// rand.Seed(time.Now().UnixNano())
 	minPort := uint16(1000)
 	port := rand.Intn(int(^uint16(0)-minPort)) + int(minPort)
 	fmt.Printf("Randomized port: %d\n", port)

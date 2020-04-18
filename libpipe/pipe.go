@@ -26,3 +26,7 @@ func SerializeMsgString(ID string, val string) (ret string, err error) {
 	}
 	return string(b), nil
 }
+
+func (pmsg *PipeMsg) DeserializePayload(out interface{}) error {
+	return json.Unmarshal([]byte(pmsg.Payload), out)
+}

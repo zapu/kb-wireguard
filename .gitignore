@@ -1,5 +1,11 @@
+# binaries
 /kb-wireguard
 /run-dev
 /lan-chat
 /stun-test
+/directconnect
+
+# other junk
 /scp.sh
+
+/.vscode
