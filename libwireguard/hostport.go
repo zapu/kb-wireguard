@@ -21,7 +21,11 @@ func (h HostPort) IsNil() bool {
 }
 
 func (h HostPort) String() string {
-	return fmt.Sprintf("%s:%d", h.Host.String(), h.Port)
+	if h.Host.To4() != nil {
+		return fmt.Sprintf("%s:%d", h.Host.String(), h.Port)
+	} else {
+		return fmt.Sprintf("[%s]:%d", h.Host.String(), h.Port)
+	}
 }
 
 func ParseHostPort(str string) (ret HostPort) {

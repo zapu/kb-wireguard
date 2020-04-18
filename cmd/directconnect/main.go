@@ -3,10 +3,12 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"log"
-	"net"
+	"math/rand"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/zapu/kb-wireguard/kbwg"
@@ -14,24 +16,23 @@ import (
 )
 
 func main() {
+	rand.Seed(time.Now().UnixNano())
 	log.Print("Hello world")
 
-	ifaces, err := net.Interfaces()
+	mgr := kbwg.MakeDCMgr()
+	conn, err := mgr.MakeOutgoingConnection()
 	if err != nil {
 		panic(err)
 	}
-	for _, iface := range ifaces {
-		addrs, err := iface.Addrs()
-		if err != nil {
-			log.Printf("Failed to get addresses for %s: %s", iface.Name, err)
-			continue
-		}
-		spew.Dump(addrs)
-	}
+
+	candidates := conn.GetEndpointCandidates()
+	spew.Dump(candidates)
+
+	reqMsg := conn.MakeRequestMsg()
+	reqMsgBytes, _ := libpipe.SerializeMsgInterface("request", reqMsg)
+	fmt.Printf("%s\n", string(reqMsgBytes))
 
 	lineReader := bufio.NewReader(os.Stdin)
-
-	mgr := kbwg.MakeDCMgr()
 	for {
 		line, err := lineReader.ReadString('\n')
 		if err != nil {

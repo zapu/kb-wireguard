@@ -3,12 +3,16 @@ package kbwg
 import (
 	"encoding/hex"
 	"fmt"
+	"log"
+	"math/rand"
 	"net"
 	"os"
 	"sync"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/zapu/kb-wireguard/libpipe"
 	"github.com/zapu/kb-wireguard/libwireguard"
+	"gortc.io/stun"
 )
 
 type PeerConnection struct {
@@ -41,14 +45,17 @@ func StartListening() (ret PeerConnection, err error) {
 	return ret, nil
 }
 
+type EndpointID string
+
 type EndpointCandidate struct {
-	Hostport libwireguard.HostPort
-	Type     string
+	Hostport   libwireguard.HostPort
+	Type       string
+	EndpointID EndpointID
 }
 
 type EndpointCandidateProviderImpl struct{}
 
-func (p *EndpointCandidateProviderImpl) GetEndpointCandidates() (ret []EndpointCandidate, err error) {
+func GetLocalIPAddresses() (ret []net.IP, err error) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return nil, err
@@ -63,8 +70,86 @@ func (p *EndpointCandidateProviderImpl) GetEndpointCandidates() (ret []EndpointC
 			continue
 		}
 		for _, addr := range addrs {
-			_ = addr
-			// ret = append(ret, addr.String())
+			ip, mask, err := net.ParseCIDR(addr.String())
+			if err != nil {
+				return nil, err
+			}
+			_ = mask
+			ret = append(ret, ip)
+		}
+	}
+	return ret, nil
+}
+
+type ReflectedAddress struct {
+	local     libwireguard.HostPort
+	reflected libwireguard.HostPort
+}
+
+func GetSTUNAddresses(localAddrs []net.IP, port uint16) (ret []ReflectedAddress, err error) {
+	raddr, err := net.ResolveUDPAddr("udp", "stun.l.google.com:19302")
+	if err != nil {
+		return nil, fmt.Errorf("error resolving remote addr: %w", err)
+	}
+
+	for _, addr := range localAddrs {
+		var localStr string
+		if addr.To4() != nil {
+			localStr = fmt.Sprintf("%s:%d", addr.String(), port)
+		} else {
+			localStr = fmt.Sprintf("[%s]:%d", addr.String(), port)
+		}
+		log.Printf("STUNning from %s", localStr)
+		laddr, err := net.ResolveUDPAddr("udp", localStr)
+		if err != nil {
+			return nil, fmt.Errorf("error resolve local upd addr: %s : %w", localStr, err)
+		}
+		conn, err := net.DialUDP("udp", laddr, raddr)
+		if err != nil {
+			err = fmt.Errorf("error dialing udp local: %s remote: %s : %w", laddr, raddr, err)
+			log.Printf("Skipping stun attempt: %s", err)
+			continue
+		}
+		defer func() {
+			err := conn.Close()
+			if err != nil {
+				log.Printf("Failed to close socket %s: %s", laddr, err)
+			}
+		}()
+		stunCli, err := stun.NewClient(conn)
+		if err != nil {
+			return nil, fmt.Errorf("error in stun.NewClient: %w", err)
+		}
+		message, err := stun.Build(stun.TransactionID, stun.BindingRequest)
+		if err != nil {
+			return nil, fmt.Errorf("error building stun tx: %w", err)
+		}
+		var doErr error
+		err = stunCli.Do(message, func(res stun.Event) {
+			if res.Error != nil {
+				doErr = fmt.Errorf("error in stun.Do: %w", res.Error)
+				return
+			}
+			var xorAddr stun.XORMappedAddress
+			if err := xorAddr.GetFrom(res.Message); err != nil {
+				doErr = fmt.Errorf("error decoding xor addr: %w", err)
+				return
+			}
+			log.Printf("Found address: %s", xorAddr.String())
+
+			ret = append(ret, ReflectedAddress{
+				local: libwireguard.HostPort{
+					Host: addr,
+					Port: port,
+				},
+				reflected: libwireguard.HostPort{
+					Host: xorAddr.IP,
+					Port: uint16(xorAddr.Port),
+				},
+			})
+		})
+		if doErr != nil {
+			return nil, doErr
 		}
 	}
 	return ret, nil
@@ -75,22 +160,135 @@ type EndpointCandidateProvider interface {
 }
 
 type DCRequestMsg struct {
+	Recipient KBDev
+	ID        DCRequestID
 	// List of endpoints that connection recipient will punch out to, to
 	// condition its NAT.
-	ID          DCRequestID
 	MyEndpoints []string
 }
 
 type DCRequestID string
 
-func MakeDCRequestID() DCRequestID {
-	return DCRequestID(hex.EncodeToString(RandBytes(16)))
+type EndpointCookie string
+
+type DCResponseEndpoint struct {
+	Endpoint string
+	Cookie   EndpointCookie
+}
+
+type DCResponseMsg struct {
+	ReqID     DCRequestID
+	Endpoints []DCResponseEndpoint
+}
+
+type DirectConnectionID string
+
+func MakeID() string {
+	return hex.EncodeToString(RandBytes(16))
+}
+
+type DCBase struct {
+	user  KBDev
+	reqID DCRequestID
+
+	localPort      uint16
+	localAddrs     []net.IP
+	reflectedAddrs []ReflectedAddress
+}
+
+func (dc *DCBase) InitNetwork() error {
+	minPort := uint16(1000)
+	port := uint16(rand.Intn(int(^uint16(0)-minPort)) + int(minPort))
+
+	localAddrs, err := GetLocalIPAddresses()
+	if err != nil {
+		return err
+	}
+
+	refAddrs, err := GetSTUNAddresses(localAddrs, port)
+	if err != nil {
+		return err
+	}
+
+	dc.localPort = port
+	dc.localAddrs = localAddrs
+	dc.reflectedAddrs = refAddrs
+	return nil
+}
+
+func (dc *DCBase) GetEndpointCandidates() (ret []libwireguard.HostPort) {
+	set := make(map[string]bool, len(dc.localAddrs)+len(dc.reflectedAddrs))
+	addAddr := func(addr libwireguard.HostPort) {
+		addrStr := addr.String()
+		if _, found := set[addrStr]; found {
+			return
+		}
+		set[addrStr] = true
+		if addr.Host.To4() == nil {
+			// Skip IPv6 for now.
+			// TODO: Fix parsing IPv6 so we can give them out as candidates.
+			return
+		}
+		ret = append(ret, addr)
+	}
+	for _, v := range dc.localAddrs {
+		addAddr(libwireguard.HostPort{
+			Host: v,
+			Port: dc.localPort,
+		})
+	}
+	for _, v := range dc.reflectedAddrs {
+		addAddr(v.reflected)
+	}
+	return ret
+}
+
+type DirectConnection struct {
+	reqID  DCRequestID
+	connID DirectConnectionID
+
+	localAddrs     []net.IP
+	reflectedAddrs []ReflectedAddress
+
+	listeners []net.PacketConn
+	conns     []net.UDPConn
+
+	isOutgoing bool
+}
+
+type DCOutgoing struct {
+	DCBase
+
+	endpoints []libwireguard.HostPort
+	conns     []net.PacketConn
+}
+
+func (dc *DCOutgoing) MakeRequestMsg() (msg DCRequestMsg) {
+	endpoints := dc.GetEndpointCandidates()
+	msg.Recipient = dc.user
+	msg.ID = dc.reqID
+	msg.MyEndpoints = make([]string, len(endpoints))
+	for i, v := range endpoints {
+		msg.MyEndpoints[i] = v.String()
+	}
+	return msg
+}
+
+func (dc *DirectConnection) close() {
+	for _, conn := range dc.conns {
+		conn.Close()
+	}
 }
 
 type DCIncoming struct {
+	DCBase
+
+	// Endpoints given to us by user requesting connection. We will be
+	// "punching out" to help them traverse NAT, if there's one.
 	endpoints []libwireguard.HostPort
-	laddr     net.Addr
-	conn      net.PacketConn
+	// Each endpoint is getting a cookie so we can identify which one is
+	// connectable.
+	cookies map[string]EndpointCookie
 }
 
 type DirectConnectionMgr struct {
@@ -109,6 +307,36 @@ func MakeDCMgr() *DirectConnectionMgr {
 	return ret
 }
 
+func (mgr *DirectConnectionMgr) MakeOutgoingConnection() (ret *DCOutgoing, err error) {
+	ret = &DCOutgoing{}
+	ret.reqID = DCRequestID(MakeID())
+
+	err = ret.InitNetwork()
+	if err != nil {
+		return nil, err
+	}
+
+	// We only want to bind to each local addr once.
+	// localSet := make(map[string]bool, len(refAddrs))
+
+	// for _, addr := range refAddrs {
+	// 	addrStr := addr.local.String()
+	// 	if _, found := localSet[addrStr]; found {
+	// 		// We are already binding to this addr
+	// 		continue
+	// 	}
+
+	// 	localSet[addrStr] = true
+	// 	listener, err := net.ListenPacket("udp", addrStr)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	ret.listeners = append(ret.listeners, listener)
+	// }
+
+	return ret, nil
+}
+
 func (mgr *DirectConnectionMgr) OnMessage(rawMsg libpipe.PipeMsg) error {
 	switch rawMsg.ID {
 	case "request":
@@ -122,12 +350,13 @@ func (mgr *DirectConnectionMgr) OnMessage(rawMsg libpipe.PipeMsg) error {
 	return nil
 }
 
-func (mgr *DirectConnectionMgr) handleRequest(msg DCRequestMsg) error {
+func (mgr *DirectConnectionMgr) handleRequest(msg DCRequestMsg) (err error) {
 	if _, found := mgr.incomingConns[msg.ID]; found {
 		return fmt.Errorf("Got a connection request with re-used request ID: %s", msg.ID)
 	}
 
 	inc := &DCIncoming{}
+	inc.reqID = msg.ID
 	inc.endpoints = make([]libwireguard.HostPort, len(msg.MyEndpoints))
 	for i, v := range msg.MyEndpoints {
 		hp := libwireguard.ParseHostPort(v)
@@ -137,17 +366,18 @@ func (mgr *DirectConnectionMgr) handleRequest(msg DCRequestMsg) error {
 		inc.endpoints[i] = hp
 	}
 
-	return nil
-}
-
-type DirectConnectionID string
-type DirectConnection struct {
-	ID DirectConnectionID
-}
-
-func AllocateDirectConnection() *DirectConnection {
-	ret := &DirectConnection{
-		ID: DirectConnectionID(hex.EncodeToString(RandBytes(16))),
+	err = inc.InitNetwork()
+	if err != nil {
+		return err
 	}
-	return ret
+
+	candidates := inc.GetEndpointCandidates()
+	inc.cookies = make(map[string]EndpointCookie, len(candidates))
+	for _, v := range candidates {
+		inc.cookies[v.String()] = EndpointCookie(MakeID())
+	}
+
+	spew.Dump(inc)
+
+	return nil
 }
