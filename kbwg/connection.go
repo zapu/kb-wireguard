@@ -10,8 +10,8 @@ import (
 	"net"
 	"os"
 	"sync"
+	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/zapu/kb-wireguard/libpipe"
 	"github.com/zapu/kb-wireguard/libwireguard"
 	"gortc.io/stun"
@@ -181,15 +181,6 @@ type DCRequestMsg struct {
 
 type DCRequestID string
 
-type EndpointCookie string
-
-type DCResponseMsg struct {
-	ReqID     DCRequestID
-	Endpoints []string
-}
-
-type DirectConnectionID string
-
 func MakeID() string {
 	return hex.EncodeToString(RandBytes(16))
 }
@@ -201,9 +192,15 @@ type DCBase struct {
 	localPort      uint16
 	localAddrs     []net.IP
 	reflectedAddrs []ReflectedAddress
+	localEndpoints []libwireguard.HostPort
 
 	// Remote party endpoints.
 	remoteAddrs []libwireguard.HostPort
+
+	listener *net.UDPConn
+	conns    []*net.UDPConn
+
+	receivedProbe bool
 }
 
 func (dc *DCBase) InitNetwork() error {
@@ -223,6 +220,63 @@ func (dc *DCBase) InitNetwork() error {
 	dc.localPort = port
 	dc.localAddrs = localAddrs
 	dc.reflectedAddrs = refAddrs
+	return nil
+}
+
+func (dc *DCBase) StartListeningForProbes() error {
+	listener, err := net.ListenUDP("udp", &net.UDPAddr{
+		Port: int(dc.localPort),
+		IP:   net.IPv4zero,
+	})
+	if err != nil {
+		return err
+	}
+
+	dc.listener = listener
+	go func() {
+		buf := make([]byte, 64)
+		for {
+			n, raddr, err := dc.listener.ReadFrom(buf)
+			if err != nil {
+				log.Printf("Probe listener: read error: %s", err)
+				break
+			}
+			log.Printf("Got probe at %d from %s: %q", dc.localPort, raddr.String(), hex.EncodeToString(buf[:n]))
+		}
+	}()
+	return nil
+}
+
+func (dc *DCBase) StartProbing() error {
+	// for _, v := range dc.remoteAddrs {
+	// 	raddr := &net.UDPAddr{
+	// 		IP:   v.Host,
+	// 		Port: int(v.Port),
+	// 	}
+	// 	conn, err := net.DialUDP("udp", laddr, raddr)
+	// 	if err != nil {
+	// 		return fmt.Errorf("Failed to dial udp in StartProbing: %s -> %s: %w",
+	// 			laddr.String(), raddr.String(), err)
+	// 	}
+	// 	dc.conns = append(dc.conns, conn)
+	// }
+
+	go func() {
+		for {
+			for _, v := range dc.remoteAddrs {
+				raddr := &net.UDPAddr{
+					IP:   v.Host,
+					Port: int(v.Port),
+				}
+				log.Printf("Probing %s...", raddr.String())
+				_, err := dc.listener.WriteTo([]byte("AAAA"), raddr)
+				if err != nil {
+					log.Printf("Probe writer: write error: %s", err)
+				}
+			}
+			time.Sleep(1 * time.Second)
+		}
+	}()
 	return nil
 }
 
@@ -253,79 +307,52 @@ func (dc *DCBase) GetEndpointCandidates() (ret []libwireguard.HostPort) {
 	return ret
 }
 
-type DirectConnection struct {
-	reqID  DCRequestID
-	connID DirectConnectionID
-
-	localAddrs     []net.IP
-	reflectedAddrs []ReflectedAddress
-
-	listeners []net.PacketConn
-	conns     []net.UDPConn
-
-	isOutgoing bool
-}
-
-type DCOutgoing struct {
-	DCBase
-
-	endpoints []libwireguard.HostPort
-	conns     []net.PacketConn
-}
-
-func (dc *DCOutgoing) MakeRequestMsg() (msg DCRequestMsg) {
-	endpoints := dc.GetEndpointCandidates()
-	msg.Recipient = dc.user
-	msg.ReqID = dc.reqID
-	msg.Endpoints = make([]string, len(endpoints))
-	for i, v := range endpoints {
-		msg.Endpoints[i] = v.String()
-	}
-	return msg
-}
-
-func (dc *DirectConnection) close() {
-	for _, conn := range dc.conns {
-		conn.Close()
-	}
-}
-
-type DCIncoming struct {
-	DCBase
-
-	// Each endpoint is getting a cookie so we can identify which one is
-	// connectable.
-	cookies map[string]EndpointCookie
-}
-
 type DirectConnectionMgr struct {
 	sync.RWMutex
 
-	outgoingConns map[DCRequestID]*DCOutgoing
-	incomingConns map[DCRequestID]*DCIncoming
+	connections map[DCRequestID]*DCBase
 }
 
 func MakeDCMgr() *DirectConnectionMgr {
 	ret := &DirectConnectionMgr{
-		outgoingConns: make(map[DCRequestID]*DCOutgoing),
-		incomingConns: make(map[DCRequestID]*DCIncoming),
+		connections: make(map[DCRequestID]*DCBase),
 	}
 	return ret
 }
 
-func (mgr *DirectConnectionMgr) MakeOutgoingConnection() (ret *DCOutgoing, err error) {
+func (mgr *DirectConnectionMgr) MakeOutgoingConnection() (ret *DCBase, err error) {
 	mgr.Lock()
 	defer mgr.Unlock()
 
-	ret = &DCOutgoing{}
-	ret.reqID = DCRequestID(MakeID())
+	ret, err = mgr.makeConnection(DCRequestID(MakeID()))
+	if err != nil {
+		return nil, err
+	}
+
+	candidates := ret.GetEndpointCandidates()
+	response := DCRequestMsg{
+		ReqID:     ret.reqID,
+		Endpoints: make([]string, len(candidates)),
+	}
+	for i, v := range candidates {
+		response.Endpoints[i] = v.String()
+	}
+	msgBytes, _ := libpipe.SerializeMsgInterface("request", response)
+	fmt.Printf("%s\n", string(msgBytes))
+	return ret, nil
+}
+
+func (mgr *DirectConnectionMgr) makeConnection(reqID DCRequestID) (ret *DCBase, err error) {
+	ret = &DCBase{
+		reqID: reqID,
+	}
 
 	err = ret.InitNetwork()
 	if err != nil {
 		return nil, err
 	}
 
-	mgr.outgoingConns[ret.reqID] = ret
+	mgr.connections[ret.reqID] = ret
 
 	// We only want to bind to each local addr once.
 	// localSet := make(map[string]bool, len(refAddrs))
@@ -361,54 +388,57 @@ func (mgr *DirectConnectionMgr) OnMessage(rawMsg libpipe.PipeMsg) error {
 	return nil
 }
 
-func (mgr *DirectConnectionMgr) handleRequest(msg DCRequestMsg) (err error) {
-	if _, found := mgr.incomingConns[msg.ReqID]; found {
-		return fmt.Errorf("Got a connection request with re-used request ID: %s", msg.ReqID)
-	}
-
+func (mgr *DirectConnectionMgr) handleRequest(msg DCRequestMsg) error {
 	mgr.Lock()
 	defer mgr.Unlock()
 
-	// Is this a response to an outgoing request?
-	out, found := mgr.outgoingConns[msg.ReqID]
+	dc, found := mgr.connections[msg.ReqID]
 	if found {
-
-	}
-
-	inc := &DCIncoming{}
-	inc.reqID = msg.ReqID
-	inc.remoteAddrs = make([]libwireguard.HostPort, len(msg.Endpoints))
-	for i, v := range msg.Endpoints {
-		hp := libwireguard.ParseHostPort(v)
-		if hp.Port == 0 {
-			return fmt.Errorf("Failed to parse host port: %s", v)
+		log.Printf("Got a response to conn %s", dc.reqID)
+		// This is something that we are already handling (so it's a response
+		// to a connection we are trying to establish).
+		dc.remoteAddrs = make([]libwireguard.HostPort, len(msg.Endpoints))
+		for i, v := range msg.Endpoints {
+			hp := libwireguard.ParseHostPort(v)
+			if hp.IsNil() {
+				return fmt.Errorf("Failed to parse remote endpoint %q", v)
+			}
+			dc.remoteAddrs[i] = hp
 		}
-		inc.remoteAddrs[i] = hp
+		err := dc.StartListeningForProbes()
+		if err != nil {
+			return err
+		}
+		err = dc.StartProbing()
+		if err != nil {
+			return err
+		}
+	} else {
+		// Someone else is trying to establish connection to us.
+		dc, err := mgr.makeConnection(msg.ReqID)
+		if err != nil {
+			return err
+		}
+		candidates := dc.GetEndpointCandidates()
+		response := DCRequestMsg{
+			ReqID:     msg.ReqID,
+			Endpoints: make([]string, len(candidates)),
+		}
+		for i, v := range candidates {
+			response.Endpoints[i] = v.String()
+		}
+		msgBytes, _ := libpipe.SerializeMsgInterface("request", response)
+		fmt.Printf("%s\n", string(msgBytes))
+
+		err = dc.StartListeningForProbes()
+		if err != nil {
+			return err
+		}
+		err = dc.StartProbing()
+		if err != nil {
+			return err
+		}
 	}
-
-	err = inc.InitNetwork()
-	if err != nil {
-		return err
-	}
-
-	candidates := inc.GetEndpointCandidates()
-	// inc.cookies = make(map[string]EndpointCookie, len(candidates))
-	// for _, v := range candidates {
-	// 	inc.cookies[v.String()] = EndpointCookie(MakeID())
-	// }
-
-	responseMsg := DCRequestMsg{
-		ReqID:     msg.ReqID,
-		Endpoints: make([]string, len(candidates)),
-	}
-	for i, v := range candidates {
-		responseMsg.Endpoints[i] = v.String()
-	}
-
-	responseBytes, _ := libpipe.SerializeMsgInterface("request", responseMsg)
-	fmt.Printf("%s\n", responseBytes)
-
-	spew.Dump(inc)
 
 	return nil
 }

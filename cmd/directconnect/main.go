@@ -3,14 +3,12 @@ package main
 import (
 	"bufio"
 	"encoding/json"
-	"fmt"
 	"log"
 	"math/rand"
 	"os"
 	"strings"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/zapu/kb-wireguard/kbwg"
 	"github.com/zapu/kb-wireguard/libpipe"
 )
@@ -25,12 +23,7 @@ func main() {
 		panic(err)
 	}
 
-	candidates := conn.GetEndpointCandidates()
-	spew.Dump(candidates)
-
-	reqMsg := conn.MakeRequestMsg()
-	reqMsgBytes, _ := libpipe.SerializeMsgInterface("request", reqMsg)
-	fmt.Printf("%s\n", string(reqMsgBytes))
+	_ = conn
 
 	lineReader := bufio.NewReader(os.Stdin)
 	for {
