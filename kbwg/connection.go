@@ -1,6 +1,8 @@
 package kbwg
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"log"
@@ -14,6 +16,18 @@ import (
 	"github.com/zapu/kb-wireguard/libwireguard"
 	"gortc.io/stun"
 )
+
+func MakeMAC(msg string, key string) (ret string, err error) {
+	keyBytes, err := hex.DecodeString(key)
+	if err != nil {
+		return ret, err
+	}
+	mac := hmac.New(sha256.New, keyBytes)
+	mac.Write([]byte(msg))
+	resultMac := mac.Sum(nil)
+	ret = hex.EncodeToString(resultMac)
+	return ret, nil
+}
 
 type PeerConnection struct {
 	laddr net.Addr
@@ -161,24 +175,17 @@ type EndpointCandidateProvider interface {
 
 type DCRequestMsg struct {
 	Recipient KBDev
-	ID        DCRequestID
-	// List of endpoints that connection recipient will punch out to, to
-	// condition its NAT.
-	MyEndpoints []string
+	ReqID     DCRequestID
+	Endpoints []string
 }
 
 type DCRequestID string
 
 type EndpointCookie string
 
-type DCResponseEndpoint struct {
-	Endpoint string
-	Cookie   EndpointCookie
-}
-
 type DCResponseMsg struct {
 	ReqID     DCRequestID
-	Endpoints []DCResponseEndpoint
+	Endpoints []string
 }
 
 type DirectConnectionID string
@@ -194,6 +201,9 @@ type DCBase struct {
 	localPort      uint16
 	localAddrs     []net.IP
 	reflectedAddrs []ReflectedAddress
+
+	// Remote party endpoints.
+	remoteAddrs []libwireguard.HostPort
 }
 
 func (dc *DCBase) InitNetwork() error {
@@ -266,10 +276,10 @@ type DCOutgoing struct {
 func (dc *DCOutgoing) MakeRequestMsg() (msg DCRequestMsg) {
 	endpoints := dc.GetEndpointCandidates()
 	msg.Recipient = dc.user
-	msg.ID = dc.reqID
-	msg.MyEndpoints = make([]string, len(endpoints))
+	msg.ReqID = dc.reqID
+	msg.Endpoints = make([]string, len(endpoints))
 	for i, v := range endpoints {
-		msg.MyEndpoints[i] = v.String()
+		msg.Endpoints[i] = v.String()
 	}
 	return msg
 }
@@ -283,9 +293,6 @@ func (dc *DirectConnection) close() {
 type DCIncoming struct {
 	DCBase
 
-	// Endpoints given to us by user requesting connection. We will be
-	// "punching out" to help them traverse NAT, if there's one.
-	endpoints []libwireguard.HostPort
 	// Each endpoint is getting a cookie so we can identify which one is
 	// connectable.
 	cookies map[string]EndpointCookie
@@ -294,20 +301,22 @@ type DCIncoming struct {
 type DirectConnectionMgr struct {
 	sync.RWMutex
 
-	outgoingConns map[DirectConnectionID]*DirectConnection
-
+	outgoingConns map[DCRequestID]*DCOutgoing
 	incomingConns map[DCRequestID]*DCIncoming
 }
 
 func MakeDCMgr() *DirectConnectionMgr {
 	ret := &DirectConnectionMgr{
-		outgoingConns: make(map[DirectConnectionID]*DirectConnection),
+		outgoingConns: make(map[DCRequestID]*DCOutgoing),
 		incomingConns: make(map[DCRequestID]*DCIncoming),
 	}
 	return ret
 }
 
 func (mgr *DirectConnectionMgr) MakeOutgoingConnection() (ret *DCOutgoing, err error) {
+	mgr.Lock()
+	defer mgr.Unlock()
+
 	ret = &DCOutgoing{}
 	ret.reqID = DCRequestID(MakeID())
 
@@ -315,6 +324,8 @@ func (mgr *DirectConnectionMgr) MakeOutgoingConnection() (ret *DCOutgoing, err e
 	if err != nil {
 		return nil, err
 	}
+
+	mgr.outgoingConns[ret.reqID] = ret
 
 	// We only want to bind to each local addr once.
 	// localSet := make(map[string]bool, len(refAddrs))
@@ -351,19 +362,28 @@ func (mgr *DirectConnectionMgr) OnMessage(rawMsg libpipe.PipeMsg) error {
 }
 
 func (mgr *DirectConnectionMgr) handleRequest(msg DCRequestMsg) (err error) {
-	if _, found := mgr.incomingConns[msg.ID]; found {
-		return fmt.Errorf("Got a connection request with re-used request ID: %s", msg.ID)
+	if _, found := mgr.incomingConns[msg.ReqID]; found {
+		return fmt.Errorf("Got a connection request with re-used request ID: %s", msg.ReqID)
+	}
+
+	mgr.Lock()
+	defer mgr.Unlock()
+
+	// Is this a response to an outgoing request?
+	out, found := mgr.outgoingConns[msg.ReqID]
+	if found {
+
 	}
 
 	inc := &DCIncoming{}
-	inc.reqID = msg.ID
-	inc.endpoints = make([]libwireguard.HostPort, len(msg.MyEndpoints))
-	for i, v := range msg.MyEndpoints {
+	inc.reqID = msg.ReqID
+	inc.remoteAddrs = make([]libwireguard.HostPort, len(msg.Endpoints))
+	for i, v := range msg.Endpoints {
 		hp := libwireguard.ParseHostPort(v)
 		if hp.Port == 0 {
 			return fmt.Errorf("Failed to parse host port: %s", v)
 		}
-		inc.endpoints[i] = hp
+		inc.remoteAddrs[i] = hp
 	}
 
 	err = inc.InitNetwork()
@@ -372,10 +392,21 @@ func (mgr *DirectConnectionMgr) handleRequest(msg DCRequestMsg) (err error) {
 	}
 
 	candidates := inc.GetEndpointCandidates()
-	inc.cookies = make(map[string]EndpointCookie, len(candidates))
-	for _, v := range candidates {
-		inc.cookies[v.String()] = EndpointCookie(MakeID())
+	// inc.cookies = make(map[string]EndpointCookie, len(candidates))
+	// for _, v := range candidates {
+	// 	inc.cookies[v.String()] = EndpointCookie(MakeID())
+	// }
+
+	responseMsg := DCRequestMsg{
+		ReqID:     msg.ReqID,
+		Endpoints: make([]string, len(candidates)),
 	}
+	for i, v := range candidates {
+		responseMsg.Endpoints[i] = v.String()
+	}
+
+	responseBytes, _ := libpipe.SerializeMsgInterface("request", responseMsg)
+	fmt.Printf("%s\n", responseBytes)
 
 	spew.Dump(inc)
 
